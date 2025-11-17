@@ -15,7 +15,11 @@ from pathlib import Path
 from collections import Counter
 from typing import Dict, List
 
+print("✓ Standard library imports complete")
+
 import torch
+print("✓ PyTorch imported")
+
 from transformers import (
     AutoTokenizer,
     AutoModelForTokenClassification,
@@ -23,10 +27,20 @@ from transformers import (
     Trainer,
     DataCollatorForTokenClassification
 )
-from datasets import Dataset, DatasetDict
-import numpy as np
-from sklearn.metrics import classification_report, accuracy_score
+print("✓ Transformers imported")
 
+from datasets import Dataset, DatasetDict
+print("✓ Datasets imported")
+
+import numpy as np
+print("✓ NumPy imported")
+
+from sklearn.metrics import classification_report, accuracy_score
+print("✓ Sklearn imported")
+
+print("=" * 80)
+print("FINE-TUNING GREBERTA FOR POS TAGGING")
+print("=" * 80)
 
 def load_pos_data(filepath: Path) -> List[Dict]:
     """Load and extract POS tagging data from alignment JSON"""
@@ -164,7 +178,7 @@ def main():
     
     # 3. Load tokenizer and model
     print(f"\n3. Loading {args.model_name}...")
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name, add_prefix_space=True)
     model = AutoModelForTokenClassification.from_pretrained(
         args.model_name,
         num_labels=num_labels,
