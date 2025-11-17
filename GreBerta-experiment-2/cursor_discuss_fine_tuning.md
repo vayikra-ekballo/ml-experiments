@@ -1,5 +1,5 @@
 # Discuss fine-tuning and logging files
-_Exported on 11/17/2025 at 15:48:10 EST from Cursor (2.0.77)_
+_Exported on 11/17/2025 at 16:14:35 EST from Cursor (2.0.77)_
 
 ---
 
@@ -11494,5 +11494,898 @@ python train_alignment.py --epochs 3
 # Read comprehensive guides
 open ALIGNMENT_COMPLETE.md  # System overview
 open ALIGNMENT_GUIDE.md     # Technical details
+```
+
+---
+
+**User**
+
+What kind of pre-processing was done on the data above? (Am I correct that the only dataset used above was SBLGNT?)
+
+---
+
+**Cursor**
+
+Great question! Let me clarify the **data sources** and **preprocessing** that was done.
+
+## 📊 **Data Sources Used (Not Just SBLGNT!)**
+
+You're partially correct - we used **THREE** main data sources:
+
+### **1. SBLGNT (Greek Text)** ✅
+- **Full name:** Society of Biblical Literature Greek New Testament
+- **With:** MorphGNT morphological annotations
+- **Location:** `nt-greek-align/data/raw/greek/sblgnt/`
+- **What it contains:**
+  - Greek surface forms (with punctuation)
+  - Normalized forms
+  - Lemmas (dictionary forms)
+  - POS tags (N-, V-, P-, etc.)
+  - Full morphological parsing (case, number, gender, tense, etc.)
+
+### **2. World English Bible (English Translation)** ✅
+- **Abbreviation:** WEB
+- **Format:** USFM (Unified Standard Format Markers)
+- **Location:** `nt-greek-align/data/raw/english/`
+- **What it contains:**
+  - English translation text
+  - **Embedded Strong's numbers** (key for alignment!)
+  - Verse structure and markup
+
+### **3. Strong's Greek Dictionary** ✅
+- **Source:** Dodson edition (XML format)
+- **Location:** `nt-greek-align/data/processed/`
+- **What it contains:**
+  - Mappings: Greek lemma → Strong's number (e.g., λόγος → G3056)
+  - Strong's number → English glosses
+  - This bridges Greek and English
+
+## 🔧 **Preprocessing Steps**
+
+Here's exactly what the `extract_alignments.py` script did:
+
+### **Step 1: Parse Greek SBLGNT Files**
+
+**Input format:**
+```
+040101 P- -------- Ἐν Ἐν ἐν ἐν
+040101 N- ----DSF- ἀρχῇ ἀρχῇ ἀρχῇ ἀρχή
+```
+
+**Processing:**
+- Split by whitespace (not tabs!)
+- Extract: verse_id, POS, parsing, surface, word, normalized, lemma
+- Normalize Greek lemmas to Unicode NFC form
+- Group by verse
+
+**Output:** Dictionary of Greek tokens per verse with full annotations
+
+### **Step 2: Parse English USFM Files**
+
+**Input format:**
+```usfm
+\v 1 \w In|strong="G1722"\w* \w the|strong="G1722"\w* beginning 
+\w was|strong="G1510"\w* \w the|strong="G1722"\w* \w Word|strong="G3056"\w*
+```
+
+**Processing:**
+- Extract words from `\w ... \w*` markers
+- Parse embedded Strong's numbers (e.g., `strong="G3056"`)
+- Remove USFM markup and footnotes
+- Handle words without Strong's numbers
+- Group by verse (matching chapter/verse to SBLGNT)
+
+**Output:** Dictionary of English tokens per verse with Strong's numbers
+
+### **Step 3: Create Alignment Pairs**
+
+**Processing:**
+1. **For each verse:**
+   - Get Greek tokens from SBLGNT
+   - Get English tokens from WEB
+   - Match by verse reference
+
+2. **For each Greek token:**
+   - Look up its lemma in `lemma_to_strongs.json`
+   - Get corresponding Strong's number(s)
+   - Example: λόγος → G3056
+
+3. **For each English token with Strong's:**
+   - Check if its Strong's number matches any Greek token's number
+   - If match: Create alignment pair
+   - Example: "Word" (G3056) matches λόγος (G3056)
+
+4. **Output alignment pairs:**
+   ```json
+   {
+     "greek_idx": 4,
+     "english_idx": 5,
+     "greek_word": "λόγος",
+     "greek_lemma": "λόγος",
+     "english_word": "Word",
+     "strongs": "G3056",
+     "confidence": "strongs_match"
+   }
+   ```
+
+### **Step 4: Split Data**
+
+**Processing:**
+- Divide verses by books (not random split)
+- Train: 20 books (Matthew through James)
+- Dev: 4 books (1-2 Peter, 1-2 John)
+- Test: 3 books (3 John, Jude, Revelation)
+
+**Why by books?** Better evaluation - tests generalization to unseen books
+
+## 📋 **Summary of Preprocessing**
+
+| Step | Input | Output | Script |
+|------|-------|--------|--------|
+| 1. Parse Greek | SBLGNT .txt files | Greek tokens with morphology | `extract_alignments.py` |
+| 2. Parse English | WEB .usfm files | English tokens with Strong's | `extract_alignments.py` |
+| 3. Map lemmas | Strong's dictionary | Lemma → Strong's lookup | `parse_lexica.py` |
+| 4. Create alignments | Greek + English + Strong's | Alignment pairs | `extract_alignments.py` |
+| 5. Split data | Full alignments | Train/dev/test splits | `prepare_data.py` |
+
+## 🔍 **Key Preprocessing Details**
+
+### **What Was NOT Done:**
+
+❌ **No manual annotation** - All alignments are automatic via Strong's  
+❌ **No cleaning of Greek text** - Used as-is from SBLGNT  
+❌ **No translation modification** - Used WEB as-is  
+❌ **No filtering of rare words** - Kept all tokens  
+
+### **What WAS Done:**
+
+✅ **Unicode normalization** - Greek lemmas normalized to NFC  
+✅ **Strong's matching** - Automatic alignment via concordance  
+✅ **Verse-level alignment** - Grouped by verse references  
+✅ **Negative sampling** - Training script generates negative examples  
+✅ **Stratified split** - By books, not random  
+
+## 🎯 **The Alignment Strategy**
+
+**Core idea:** Use Strong's concordance numbers as "weak supervision"
+
+```
+Greek lemma:  λόγος  →  Strong's: G3056  →  English: "Word"
+                            ↑
+                    (This is the bridge!)
+```
+
+**Why "weak supervision"?**
+- Strong's numbers are somewhat noisy
+- Many-to-many mappings are common
+- Function words (articles, prepositions) often over-aligned
+- But: Provides 171k training examples automatically!
+
+## 📊 **Data Quality Notes**
+
+### **Strengths:**
+✅ Large-scale (171k alignment pairs)  
+✅ Automatic extraction (no manual work)  
+✅ Based on scholarly resources (SBLGNT, WEB, Strong's)  
+✅ Full morphological annotations preserved  
+
+### **Limitations:**
+⚠️ **Noisy alignments** - Strong's creates many-to-many matches  
+⚠️ **No word order** - Strong's doesn't capture positional alignment  
+⚠️ **Function word issues** - Articles/particles over-aligned  
+⚠️ **Translation shifts** - Idiomatic translations not captured  
+
+### **Coverage:**
+- **82.1% of verses** have at least one alignment
+- **~21.6 alignments per verse** on average
+- Some verses have 0 alignments (no Strong's matches)
+
+## 🔬 **Example of Complete Pipeline**
+
+**Input files:**
+```
+nt-greek-align/data/raw/greek/sblgnt/64-Jn-morphgnt.txt
+nt-greek-align/data/raw/english/73-JHNeng-web.usfm
+nt-greek-align/data/processed/lemma_to_strongs.json
+```
+
+**After `extract_alignments.py`:**
+```json
+{
+  "verse_id": "040101",
+  "book_name": "John",
+  "chapter": 1,
+  "verse": 1,
+  "greek_tokens": [
+    {"word": "Ἐν", "lemma": "ἐν", "pos": "P-", ...},
+    {"word": "ἀρχῇ", "lemma": "ἀρχή", "pos": "N-", ...}
+  ],
+  "english_tokens": [
+    {"word": "In", "strongs": "G1722"},
+    {"word": "beginning", "strongs": null}
+  ],
+  "alignments": [
+    {"greek_idx": 0, "english_idx": 0, "strongs": "G1722"}
+  ]
+}
+```
+
+**After `prepare_data.py`:**
+```
+data/train.json  (7,198 verses)
+data/dev.json    (284 verses)
+data/test.json   (443 verses)
+```
+
+## ✅ **To Answer Your Question Directly:**
+
+**Q: Was only SBLGNT used?**  
+**A: No!** Three sources were used:
+1. **SBLGNT** (Greek text + morphology)
+2. **World English Bible** (English translation + Strong's)
+3. **Strong's Dictionary** (Greek-English lexicon)
+
+**Q: What preprocessing was done?**  
+**A: Five main steps:**
+1. Parse SBLGNT Greek files
+2. Parse WEB English files  
+3. Map Greek lemmas to Strong's numbers
+4. Create alignments via Strong's matching
+5. Split into train/dev/test by books
+
+**The key preprocessing innovation:** Using Strong's concordance numbers embedded in the WEB to automatically create 171k training examples without manual annotation!
+
+This is why your data is described as using "weak supervision" - Strong's provides noisy but useful alignment signals at scale.
+
+```plaintext
+040101 P- -------- Ἐν Ἐν ἐν ἐν
+040101 N- ----DSF- ἀρχῇ ἀρχῇ ἀρχῇ ἀρχή
+```
+
+```plaintext
+\v 1 \w In|strong="G1722"\w* \w the|strong="G1722"\w* beginning 
+\w was|strong="G1510"\w* \w the|strong="G1722"\w* \w Word|strong="G3056"\w*
+```
+
+```json
+   {
+     "greek_idx": 4,
+     "english_idx": 5,
+     "greek_word": "λόγος",
+     "greek_lemma": "λόγος",
+     "english_word": "Word",
+     "strongs": "G3056",
+     "confidence": "strongs_match"
+   }
+```
+
+```plaintext
+Greek lemma:  λόγος  →  Strong's: G3056  →  English: "Word"
+                            ↑
+                    (This is the bridge!)
+```
+
+```plaintext
+nt-greek-align/data/raw/greek/sblgnt/64-Jn-morphgnt.txt
+nt-greek-align/data/raw/english/73-JHNeng-web.usfm
+nt-greek-align/data/processed/lemma_to_strongs.json
+```
+
+```json
+{
+  "verse_id": "040101",
+  "book_name": "John",
+  "chapter": 1,
+  "verse": 1,
+  "greek_tokens": [
+    {"word": "Ἐν", "lemma": "ἐν", "pos": "P-", ...},
+    {"word": "ἀρχῇ", "lemma": "ἀρχή", "pos": "N-", ...}
+  ],
+  "english_tokens": [
+    {"word": "In", "strongs": "G1722"},
+    {"word": "beginning", "strongs": null}
+  ],
+  "alignments": [
+    {"greek_idx": 0, "english_idx": 0, "strongs": "G1722"}
+  ]
+}
+```
+
+```plaintext
+data/train.json  (7,198 verses)
+data/dev.json    (284 verses)
+data/test.json   (443 verses)
+```
+
+---
+
+**User**
+
+In which files here does the code for all this pre-processing exist?
+
+---
+
+**Cursor**
+
+Great question! Here's exactly where all the preprocessing code lives:
+
+## 📂 **Preprocessing Code Locations**
+
+### **1. Lexicon Parsing** (Strong's Dictionary Processing)
+
+**File:** `nt-greek-align/scripts/parse_lexica.py`
+
+**What it does:**
+- Parses Strong's Greek Dictionary XML
+- Creates `lemma_to_strongs.json` (Greek lemma → Strong's number)
+- Creates `lemma_to_glosses.json` (Greek lemma → English glosses)
+- Creates `strongs_dictionary.json` (Full Strong's entries)
+
+**Key functions:**
+```python
+def parse_strongs_xml()      # Parse XML dictionary
+def normalize_greek()         # Unicode NFC normalization
+def extract_glosses()         # Get English translations
+def create_mappings()         # Build lookup dictionaries
+```
+
+**Output:**
+```
+nt-greek-align/data/processed/
+├── lemma_to_strongs.json
+├── lemma_to_glosses.json
+└── strongs_dictionary.json
+```
+
+---
+
+### **2. Alignment Extraction** (Main Preprocessing) ⭐
+
+**File:** `nt-greek-align/scripts/extract_alignments.py`
+
+**What it does:**
+- **Parses SBLGNT Greek files** (Step 1)
+- **Parses WEB English USFM files** (Step 2)
+- **Creates word-level alignments** via Strong's (Step 3)
+- **Exports to JSON format** (Step 4)
+
+**Key functions:**
+
+```python
+# Greek parsing
+def parse_sblgnt_file(filepath):
+    """Parse SBLGNT morphological Greek NT file
+    
+    Returns: Dict[verse_id -> List[GreekToken]]
+    """
+    # Lines 110-135
+    # Splits by whitespace (not tabs!)
+    # Extracts: verse_id, pos, parsing, surface, word, normalized, lemma
+    
+# English parsing  
+def parse_usfm_file(filepath):
+    """Parse USFM English Bible file
+    
+    Returns: Dict[(chapter, verse) -> List[EnglishToken]]
+    """
+    # Lines 177-214
+    # Extracts words and Strong's numbers from USFM markers
+    
+def parse_usfm_verse(verse_text):
+    """Parse a USFM verse and extract English words with Strong's numbers
+    
+    Example: \\w In|strong="G1722"\\w* -> EnglishToken("In", "G1722")
+    """
+    # Lines 138-175
+    # Regex pattern: r'\\w\s+([^|\\]+?)(?:\|strong="(G\d+)")?\s*\\w\*'
+
+# Alignment creation
+def create_alignments(greek_verses, english_verses, lemma_to_strongs, book_code):
+    """Create alignment pairs between Greek and English tokens
+    
+    Returns: List[Dict] with verse-level alignments
+    """
+    # Lines 217-317
+    # For each verse:
+    #   - Get Greek tokens
+    #   - Get English tokens  
+    #   - Match via Strong's numbers
+    #   - Create alignment pairs
+
+# Main driver
+def main():
+    """Main function that orchestrates everything"""
+    # Lines 319-443
+    # Loads data, processes all books, saves output
+```
+
+**Line-by-line breakdown:**
+
+| Lines | What It Does |
+|-------|--------------|
+| 1-81 | Constants, imports, book mappings |
+| 84-108 | `GreekToken` class definition |
+| 110-135 | `parse_sblgnt_file()` - Parse Greek |
+| 138-175 | `parse_usfm_verse()` - Parse English verse |
+| 177-214 | `parse_usfm_file()` - Parse English file |
+| 217-236 | `load_lemma_to_strongs()` - Load lexicon |
+| 239-317 | `create_alignments()` - **Core alignment logic** |
+| 319-443 | `main()` - Process all books and save |
+
+**Output:**
+```
+nt-greek-align/data/processed/alignments_nt_full.json (88 MB)
+```
+
+---
+
+### **3. Data Splitting** (Train/Dev/Test)
+
+**File:** `GreBerta-experiment-2/prepare_data.py`
+
+**What it does:**
+- Loads full alignment JSON
+- Splits by books (not random)
+- Creates train/dev/test sets
+- Computes statistics
+
+**Key functions:**
+```python
+def main():
+    # Lines 13-154
+    # Load alignments_nt_full.json
+    # Define book splits
+    # Filter by book names
+    # Save train.json, dev.json, test.json
+```
+
+**Output:**
+```
+GreBerta-experiment-2/data/
+├── train.json (7,198 verses)
+├── dev.json   (284 verses)
+└── test.json  (443 verses)
+```
+
+---
+
+### **4. Viewing Tool** (Inspection/Debugging)
+
+**File:** `nt-greek-align/scripts/view_alignments.py`
+
+**What it does:**
+- Loads alignment JSON
+- Formats for human reading
+- Interactive verse lookup
+
+**Key functions:**
+```python
+def format_alignment_table()    # Pretty print alignments
+def format_alignment_visual()   # Matrix visualization
+def find_verse()                # Search by reference
+```
+
+---
+
+## 🗂️ **Complete File Map**
+
+```
+nt-greek-align/scripts/
+│
+├── parse_lexica.py              ← Step 0: Parse Strong's dictionary
+│   └── Creates: lemma_to_strongs.json, strongs_dictionary.json
+│
+├── extract_alignments.py        ← Step 1-3: Main preprocessing ⭐⭐⭐
+│   └── Creates: alignments_nt_full.json (88 MB)
+│
+└── view_alignments.py           ← Inspection tool
+    └── Views: alignments_nt_full.json
+
+GreBerta-experiment-2/
+│
+└── prepare_data.py              ← Step 4: Split data
+    └── Creates: train.json, dev.json, test.json
+```
+
+---
+
+## 🔍 **Core Preprocessing Functions**
+
+Here are the exact lines where key preprocessing happens:
+
+### **In `extract_alignments.py`:**
+
+**Line 110-135: Parse SBLGNT Greek**
+```python
+def parse_sblgnt_file(filepath: Path) -> Dict[str, List[GreekToken]]:
+    verses = defaultdict(list)
+    
+    with open(filepath, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Split by whitespace (the file uses spaces, not tabs)
+            parts = line.split()
+            if len(parts) != 7:
+                continue
+                
+            verse_id, pos, parsing, surface, word, normalized, lemma = parts
+            
+            token = GreekToken(verse_id, pos, parsing, surface, word, normalized, lemma)
+            verses[verse_id].append(token)
+    
+    return verses
+```
+
+**Line 138-175: Parse English USFM**
+```python
+def parse_usfm_verse(verse_text: str) -> List[EnglishToken]:
+    tokens = []
+    
+    # Pattern to match: \w word|strong="G####"\w*
+    pattern = r'\\w\s+([^|\\]+?)(?:\|strong="(G\d+)")?\s*\\w\*'
+    
+    for match in re.finditer(pattern, verse_text):
+        word = match.group(1).strip()
+        strongs = match.group(2)  # May be None
+        
+        # Clean up word
+        word = word.replace("'s", '').strip()
+        
+        if word:
+            tokens.append(EnglishToken(word, strongs))
+    
+    return tokens
+```
+
+**Line 239-317: Create Alignments** ⭐ **MOST IMPORTANT**
+```python
+def create_alignments(greek_verses, english_verses, lemma_to_strongs, book_code):
+    alignments = []
+    
+    for verse_id, greek_tokens in greek_verses.items():
+        # Parse verse_id: BBCCVV format
+        chapter = int(verse_id[2:4])
+        verse = int(verse_id[4:6])
+        
+        # Get corresponding English verse
+        english_tokens = english_verses.get((chapter, verse))
+        if english_tokens is None:
+            continue
+        
+        verse_alignment = {
+            'verse_id': verse_id,
+            'greek_tokens': [t.to_dict() for t in greek_tokens],
+            'english_tokens': [t.to_dict() for t in english_tokens],
+            'alignments': []
+        }
+        
+        # Create word-level alignments using Strong's numbers
+        for greek_idx, greek_token in enumerate(greek_tokens):
+            # Get Strong's number(s) for this Greek lemma
+            strongs_numbers = lemma_to_strongs.get(greek_token.lemma, [])
+            
+            # Find English tokens with matching Strong's numbers
+            for english_idx, english_token in enumerate(english_tokens):
+                if english_token.strongs in strongs_numbers:
+                    verse_alignment['alignments'].append({
+                        'greek_idx': greek_idx,
+                        'english_idx': english_idx,
+                        'greek_word': greek_token.word,
+                        'greek_lemma': greek_token.lemma,
+                        'english_word': english_token.word,
+                        'strongs': english_token.strongs,
+                        'confidence': 'strongs_match'
+                    })
+        
+        alignments.append(verse_alignment)
+    
+    return alignments
+```
+
+---
+
+## 📊 **Data Flow Diagram**
+
+```
+INPUT FILES:
+  nt-greek-align/data/raw/greek/sblgnt/*.txt
+  nt-greek-align/data/raw/english/*.usfm
+  nt-greek-align/data/raw/lexica/dodson/strongsgreek.xml
+
+       ↓
+       
+[parse_lexica.py]  (Step 0)
+  - Parses Strong's XML
+  - Creates lemma mappings
+       ↓
+       
+  nt-greek-align/data/processed/lemma_to_strongs.json
+       ↓
+       
+[extract_alignments.py]  (Steps 1-3) ⭐⭐⭐
+  - parse_sblgnt_file()    → Greek tokens
+  - parse_usfm_file()      → English tokens  
+  - create_alignments()    → Alignment pairs
+       ↓
+       
+  nt-greek-align/data/processed/alignments_nt_full.json (88 MB)
+       ↓
+       
+[prepare_data.py]  (Step 4)
+  - Split by books
+  - Create train/dev/test
+       ↓
+       
+  GreBerta-experiment-2/data/train.json
+  GreBerta-experiment-2/data/dev.json
+  GreBerta-experiment-2/data/test.json
+       ↓
+       
+[train_alignment.py]  (Training)
+  - Loads splits
+  - Creates model
+  - Trains alignment
+```
+
+---
+
+## ✅ **Summary Answer**
+
+**The preprocessing code exists in these files:**
+
+1. **`nt-greek-align/scripts/parse_lexica.py`** (174 lines)
+   - Strong's dictionary parsing
+
+2. **`nt-greek-align/scripts/extract_alignments.py`** (443 lines) ⭐⭐⭐
+   - **MAIN PREPROCESSING** - Greek + English → Alignments
+   - Lines 110-135: Greek parsing
+   - Lines 138-175: English parsing
+   - Lines 239-317: Alignment creation ← **Core algorithm**
+
+3. **`GreBerta-experiment-2/prepare_data.py`** (154 lines)
+   - Train/dev/test splitting
+
+4. **`nt-greek-align/scripts/view_alignments.py`** (250 lines)
+   - Inspection and viewing tool
+
+**The most important file is `extract_alignments.py` - that's where 90% of the preprocessing happens!**
+
+Would you like me to walk through any specific function in detail?
+
+```python
+def parse_strongs_xml()      # Parse XML dictionary
+def normalize_greek()         # Unicode NFC normalization
+def extract_glosses()         # Get English translations
+def create_mappings()         # Build lookup dictionaries
+```
+
+```plaintext
+nt-greek-align/data/processed/
+├── lemma_to_strongs.json
+├── lemma_to_glosses.json
+└── strongs_dictionary.json
+```
+
+```python
+# Greek parsing
+def parse_sblgnt_file(filepath):
+    """Parse SBLGNT morphological Greek NT file
+    
+    Returns: Dict[verse_id -> List[GreekToken]]
+    """
+    # Lines 110-135
+    # Splits by whitespace (not tabs!)
+    # Extracts: verse_id, pos, parsing, surface, word, normalized, lemma
+    
+# English parsing  
+def parse_usfm_file(filepath):
+    """Parse USFM English Bible file
+    
+    Returns: Dict[(chapter, verse) -> List[EnglishToken]]
+    """
+    # Lines 177-214
+    # Extracts words and Strong's numbers from USFM markers
+    
+def parse_usfm_verse(verse_text):
+    """Parse a USFM verse and extract English words with Strong's numbers
+    
+    Example: \\w In|strong="G1722"\\w* -> EnglishToken("In", "G1722")
+    """
+    # Lines 138-175
+    # Regex pattern: r'\\w\s+([^|\\]+?)(?:\|strong="(G\d+)")?\s*\\w\*'
+
+# Alignment creation
+def create_alignments(greek_verses, english_verses, lemma_to_strongs, book_code):
+    """Create alignment pairs between Greek and English tokens
+    
+    Returns: List[Dict] with verse-level alignments
+    """
+    # Lines 217-317
+    # For each verse:
+    #   - Get Greek tokens
+    #   - Get English tokens  
+    #   - Match via Strong's numbers
+    #   - Create alignment pairs
+
+# Main driver
+def main():
+    """Main function that orchestrates everything"""
+    # Lines 319-443
+    # Loads data, processes all books, saves output
+```
+
+```plaintext
+nt-greek-align/data/processed/alignments_nt_full.json (88 MB)
+```
+
+```python
+def main():
+    # Lines 13-154
+    # Load alignments_nt_full.json
+    # Define book splits
+    # Filter by book names
+    # Save train.json, dev.json, test.json
+```
+
+```plaintext
+GreBerta-experiment-2/data/
+├── train.json (7,198 verses)
+├── dev.json   (284 verses)
+└── test.json  (443 verses)
+```
+
+```python
+def format_alignment_table()    # Pretty print alignments
+def format_alignment_visual()   # Matrix visualization
+def find_verse()                # Search by reference
+```
+
+```plaintext
+nt-greek-align/scripts/
+│
+├── parse_lexica.py              ← Step 0: Parse Strong's dictionary
+│   └── Creates: lemma_to_strongs.json, strongs_dictionary.json
+│
+├── extract_alignments.py        ← Step 1-3: Main preprocessing ⭐⭐⭐
+│   └── Creates: alignments_nt_full.json (88 MB)
+│
+└── view_alignments.py           ← Inspection tool
+    └── Views: alignments_nt_full.json
+
+GreBerta-experiment-2/
+│
+└── prepare_data.py              ← Step 4: Split data
+    └── Creates: train.json, dev.json, test.json
+```
+
+```python
+def parse_sblgnt_file(filepath: Path) -> Dict[str, List[GreekToken]]:
+    verses = defaultdict(list)
+    
+    with open(filepath, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Split by whitespace (the file uses spaces, not tabs)
+            parts = line.split()
+            if len(parts) != 7:
+                continue
+                
+            verse_id, pos, parsing, surface, word, normalized, lemma = parts
+            
+            token = GreekToken(verse_id, pos, parsing, surface, word, normalized, lemma)
+            verses[verse_id].append(token)
+    
+    return verses
+```
+
+```python
+def parse_usfm_verse(verse_text: str) -> List[EnglishToken]:
+    tokens = []
+    
+    # Pattern to match: \w word|strong="G####"\w*
+    pattern = r'\\w\s+([^|\\]+?)(?:\|strong="(G\d+)")?\s*\\w\*'
+    
+    for match in re.finditer(pattern, verse_text):
+        word = match.group(1).strip()
+        strongs = match.group(2)  # May be None
+        
+        # Clean up word
+        word = word.replace("'s", '').strip()
+        
+        if word:
+            tokens.append(EnglishToken(word, strongs))
+    
+    return tokens
+```
+
+```python
+def create_alignments(greek_verses, english_verses, lemma_to_strongs, book_code):
+    alignments = []
+    
+    for verse_id, greek_tokens in greek_verses.items():
+        # Parse verse_id: BBCCVV format
+        chapter = int(verse_id[2:4])
+        verse = int(verse_id[4:6])
+        
+        # Get corresponding English verse
+        english_tokens = english_verses.get((chapter, verse))
+        if english_tokens is None:
+            continue
+        
+        verse_alignment = {
+            'verse_id': verse_id,
+            'greek_tokens': [t.to_dict() for t in greek_tokens],
+            'english_tokens': [t.to_dict() for t in english_tokens],
+            'alignments': []
+        }
+        
+        # Create word-level alignments using Strong's numbers
+        for greek_idx, greek_token in enumerate(greek_tokens):
+            # Get Strong's number(s) for this Greek lemma
+            strongs_numbers = lemma_to_strongs.get(greek_token.lemma, [])
+            
+            # Find English tokens with matching Strong's numbers
+            for english_idx, english_token in enumerate(english_tokens):
+                if english_token.strongs in strongs_numbers:
+                    verse_alignment['alignments'].append({
+                        'greek_idx': greek_idx,
+                        'english_idx': english_idx,
+                        'greek_word': greek_token.word,
+                        'greek_lemma': greek_token.lemma,
+                        'english_word': english_token.word,
+                        'strongs': english_token.strongs,
+                        'confidence': 'strongs_match'
+                    })
+        
+        alignments.append(verse_alignment)
+    
+    return alignments
+```
+
+```plaintext
+INPUT FILES:
+  nt-greek-align/data/raw/greek/sblgnt/*.txt
+  nt-greek-align/data/raw/english/*.usfm
+  nt-greek-align/data/raw/lexica/dodson/strongsgreek.xml
+
+       ↓
+       
+[parse_lexica.py]  (Step 0)
+  - Parses Strong's XML
+  - Creates lemma mappings
+       ↓
+       
+  nt-greek-align/data/processed/lemma_to_strongs.json
+       ↓
+       
+[extract_alignments.py]  (Steps 1-3) ⭐⭐⭐
+  - parse_sblgnt_file()    → Greek tokens
+  - parse_usfm_file()      → English tokens  
+  - create_alignments()    → Alignment pairs
+       ↓
+       
+  nt-greek-align/data/processed/alignments_nt_full.json (88 MB)
+       ↓
+       
+[prepare_data.py]  (Step 4)
+  - Split by books
+  - Create train/dev/test
+       ↓
+       
+  GreBerta-experiment-2/data/train.json
+  GreBerta-experiment-2/data/dev.json
+  GreBerta-experiment-2/data/test.json
+       ↓
+       
+[train_alignment.py]  (Training)
+  - Loads splits
+  - Creates model
+  - Trains alignment
 ```
 
