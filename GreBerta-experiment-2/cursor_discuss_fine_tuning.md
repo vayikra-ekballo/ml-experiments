@@ -1,5 +1,5 @@
 # Discuss fine-tuning and logging files
-_Exported on 11/17/2025 at 12:31:17 EST from Cursor (2.0.77)_
+_Exported on 11/17/2025 at 12:38:36 EST from Cursor (2.0.77)_
 
 ---
 
@@ -191,5 +191,189 @@ Which would be most helpful for you right now?
      "tokens": ["Ἐν", "ἀρχῇ", "ἦν", "ὁ", "λόγος"],
      "pos_tags": ["P-", "N-", "V-", "RA", "N-"]
    }
+```
+
+---
+
+**User**
+
+Is alignment (e.g. to build an interlinear) one of the tasks that is supported, that we could fine tune for? And, also, would a really small dataset (like just New Testament) be sufficient for fine-tuning the model?
+
+---
+
+**Cursor**
+
+Excellent questions! Let me address both:
+
+## 🔗 **Question 1: Can We Fine-Tune for Alignment Tasks?**
+
+**Yes, absolutely!** Alignment is a supported and very interesting task for your use case. In fact, looking at your `nt-greek-align` project name and data, this seems like it might be your ultimate goal!
+
+### **Alignment Approaches with GreBerta:**
+
+#### **A. Token-Pair Classification** (Most Direct)
+- **How it works**: For each (Greek word, English word) pair, predict probability they're aligned
+- **Model**: Add a classification head that takes embeddings from both words
+- **Architecture**: 
+  - Encode Greek sentence with GreBerta → get embeddings for each Greek token
+  - Encode English sentence with English BERT → get embeddings for each English token
+  - For each pair, concatenate embeddings and predict: `[ALIGNED, NOT_ALIGNED]`
+- **Data needed**: Gold-standard word alignments (you'd need to create these)
+
+#### **B. Similarity-Based Alignment** (Using Embeddings)
+- **How it works**: Extract contextualized embeddings, compute cosine similarity, threshold to find alignments
+- **Fine-tuning**: Train the model to produce embeddings where aligned words have high similarity
+- **Approach**: Contrastive learning - pull aligned pairs together, push non-aligned apart
+- **Simpler**: Doesn't require architectural changes to GreBerta
+
+#### **C. Weak Supervision with Strong's Numbers** ⭐ Great for your data!
+- **Your advantage**: English WEB has Strong's numbers embedded!
+  ```
+  \w In|strong="G1722"\w* ... \w Word|strong="G3056"\w*
+  ```
+- **How to use**: Strong's numbers provide noisy but useful alignment signals
+  - Greek lemma `λόγος` → Strong's `G3056` → English "Word"
+  - This gives you automatic (imperfect) alignment labels
+- **Process**: 
+  1. Parse Strong's numbers from English text
+  2. Match to Greek lemmas via `lemma_to_strongs.json` 
+  3. Create alignment pairs automatically
+  4. Fine-tune with this "silver standard" data
+
+#### **D. Sequential Labeling (BIO Tagging)**
+- **How it works**: For each Greek word, predict which English word position(s) it aligns to
+- **Challenge**: Variable-length alignments (1-to-many, many-to-1)
+
+### **Most Promising Approach for You:**
+
+**Multi-step strategy using your existing data:**
+
+1. **Extract weak alignments from Strong's numbers** (you have this!)
+2. **Fine-tune GreBerta for Greek-side tasks** (POS, lemmatization) to improve representations
+3. **Use a cross-lingual alignment model** with GreBerta as Greek encoder
+4. **Manually correct a small sample** to create gold-standard alignments for evaluation
+
+## 📊 **Question 2: Is the NT Dataset Sufficient?**
+
+**Yes, the NT is sufficient for fine-tuning, with some caveats:**
+
+### **Dataset Size Analysis:**
+
+**New Testament Corpus:**
+- **~138,000-140,000 words** (Greek tokens)
+- **~8,000 unique lemmas**
+- **~180,000 words** in English (slightly more)
+- **27 books** with diverse genres (narrative, epistles, apocalyptic)
+
+### **Is This Enough?**
+
+| Task Type | NT Size Sufficient? | Why? |
+|-----------|-------------------|------|
+| **Domain Adaptation** | ⚠️ Marginal | Small for continued pre-training, but usable. Adding LXX would help significantly |
+| **POS Tagging** | ✅ Yes | 138k labeled examples is plenty for supervised token classification |
+| **Morphological Analysis** | ✅ Yes | Same as POS - rich annotations available |
+| **Lemmatization** | ✅ Yes | 138k examples with lemma labels |
+| **NER** | ⚠️ Maybe | Depends on entity frequency; named entities are sparser |
+| **Word Alignment** | ⚠️ Depends | Need gold alignments; Strong's provides ~138k weak labels (sufficient) |
+
+### **Key Factors:**
+
+✅ **Why NT is sufficient:**
+1. **You're fine-tuning, not pre-training** - GreBerta already knows Greek
+2. **Rich annotations** - Every word has POS, morphology, lemma
+3. **High quality** - SBLGNT is scholar-vetted
+4. **Diverse genres** - Gospels, epistles, history, apocalyptic
+5. **For supervised tasks**, 100k+ examples is typically adequate
+
+⚠️ **Limitations:**
+1. **Vocabulary coverage** - NT uses ~8k lemmas; Classical Greek has ~50k+
+2. **Koine-specific idioms** - Limited to 1st century Koine
+3. **Genre gaps** - No poetry, philosophy, technical prose
+4. **For unsupervised pre-training**, it's on the small side
+
+### **Recommendations:**
+
+**Scenario A: Starting with NT Only** ✅ Do this first
+- Perfectly fine for initial experiments
+- Test your pipeline, evaluation metrics
+- Get baseline results quickly
+- Understand what works before scaling up
+
+**Scenario B: Adding LXX** ⭐ Recommended next step
+- **Adds ~600k words** (4-5x more data)
+- **Broader vocabulary** - creation stories, law, prophecy, poetry
+- **Earlier Koine** - some books translated 3rd century BCE
+- **Better coverage** of Greek OT references in NT
+
+**Scenario C: Adding Other Koine Sources** 💪 For robust model
+- **Apostolic Fathers** - Early church writings (~200k words)
+- **Josephus** - Historical texts (~400k words)
+- **Papyri** - Real-world Koine documents
+- **Total corpus** could reach 1M+ words
+
+### **Practical Strategy:**
+
+```
+Phase 1: NT Only (NOW)
+├── Quick iteration
+├── Validate approach
+└── Benchmark: ~3-5 days of work
+
+Phase 2: NT + LXX (NEXT)
+├── Significantly more data
+├── Better generalization  
+└── Timeline: +1-2 weeks
+
+Phase 3: Full Koine Corpus (LATER)
+├── Production-quality model
+├── Publishable results
+└── Timeline: +2-4 weeks
+```
+
+## 🎯 **Specific Recommendation for Alignment Task:**
+
+**Given your data (NT with Strong's numbers), here's a concrete path:**
+
+1. **Parse Strong's numbers from English WEB** ✅ Your data has this!
+2. **Create automatic Greek↔English alignments** using:
+   - Greek lemmas from SBLGNT (column 7)
+   - Strong's numbers from WEB
+   - Your `lemma_to_strongs.json` mapping
+3. **This gives you ~138k aligned verse pairs** with noisy word-level alignments
+4. **Fine-tune for alignment** using contrastive learning or classification
+5. **Manually align 100-200 verses** as gold-standard test set
+6. **Evaluate** against your gold standard
+
+**This is absolutely doable with NT data alone!** The Strong's numbers are a goldmine for this task.
+
+---
+
+Would you like me to:
+1. **Write a script to extract alignment pairs** from your Strong's-annotated data?
+2. **Create a simple alignment fine-tuning example** using your NT corpus?
+3. **Set up the POS tagging task first** as a simpler warm-up before tackling alignment?
+4. **Help you design the data splits** (train/dev/test) for your NT corpus?
+
+The alignment task is actually very well-suited to your data! 🎯
+
+```plaintext
+  \w In|strong="G1722"\w* ... \w Word|strong="G3056"\w*
+```
+
+```plaintext
+Phase 1: NT Only (NOW)
+├── Quick iteration
+├── Validate approach
+└── Benchmark: ~3-5 days of work
+
+Phase 2: NT + LXX (NEXT)
+├── Significantly more data
+├── Better generalization  
+└── Timeline: +1-2 weeks
+
+Phase 3: Full Koine Corpus (LATER)
+├── Production-quality model
+├── Publishable results
+└── Timeline: +2-4 weeks
 ```
 
