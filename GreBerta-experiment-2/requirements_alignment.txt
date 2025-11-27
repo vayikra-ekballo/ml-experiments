@@ -1,4 +1,5 @@
 # Requirements for Word Alignment Training
+# Works for both v1 (train_alignment.py) and v2 (train_alignment_v2.py)
 
 # Core dependencies
 torch>=2.0.0
@@ -14,4 +15,10 @@ accelerate>=0.20.0
 
 # For evaluation and metrics
 numpy>=1.24.0
+
+# Note: Install with:
+#   pip install -r requirements_alignment.txt
+#
+# For GPU support, install PyTorch with CUDA:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu118
 
